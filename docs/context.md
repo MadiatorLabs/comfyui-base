@@ -4,24 +4,25 @@ This document outlines how to work in this repository from a developer point of 
 
 ## Stack Overview
 
-- **Base OS**: Ubuntu 22.04
+- **Base OS**: Ubuntu 24.04
 - **GPU stack**:
-  - Regular image: CUDA 12.4, stable PyTorch via upstream requirements
-  - RTX 5090 image: CUDA 12.8, PyTorch Nightly (explicit cu128 wheels)
+  - Regular image: CUDA 12.6, stable PyTorch (pinned version via docker-bake.hcl)
+  - RTX 5090 image: CUDA 12.9, PyTorch (pinned version, explicit cu129 wheels)
 - **Python**: 3.12 (set as system default inside the image)
-- **Package manager**: pip + uv (uv used for fast installs; `UV_LINK_MODE=copy`)
+- **Package manager**: pip + pip-tools (lock file generated at build time with `pip-compile --generate-hashes`)
 - **Tools bundled**: FileBrowser (port 8080), JupyterLab (port 8888), OpenSSH server (port 22), FFmpeg (NVENC), common CLI tools
 - **Primary app**: ComfyUI, with pre-installed custom nodes
 
 ## Repository Layout
 
-- `Dockerfile` – Regular image (CUDA 12.4)
-- `Dockerfile.5090` – RTX 5090 image (CUDA 12.8 + PyTorch cu128)
+- `Dockerfile` – Regular image (CUDA 12.6)
+- `Dockerfile.5090` – RTX 5090 image (CUDA 12.9 + PyTorch cu129)
 - `start.sh` – Runtime bootstrap for regular image
 - `start.5090.sh` – Runtime bootstrap for 5090 image
-- `docker-bake.hcl` – Buildx bake targets (`regular`, `dev`, `rtx5090`)
+- `docker-bake.hcl` – Buildx bake targets (`regular`, `dev`, `rtx5090`) and all version pins (single source of truth)
+- `scripts/fetch-hashes.sh` – Fetches latest custom node commit hashes from GitHub
 - `README.md` – User-facing overview
-- `docs/conventions.md` – This document
+- `docs/context.md` – This document
 
 At runtime, the container uses:
 
@@ -41,7 +42,7 @@ Use Docker Buildx Bake with the provided HCL file.
   - Dockerfile: `Dockerfile`
   - Tag: `runpod/comfyui:dev`
   - Output: local docker image (not pushed)
-- `rtx5090` (CUDA 12.8 + latest torch):
+- `rtx5090` (CUDA 12.9 + latest torch):
   - Dockerfile: `Dockerfile.5090`
   - Tag: `runpod/comfyui:${TAG}-5090`
 
@@ -72,13 +73,13 @@ Startup is handled by `start.sh` (or `start.5090.sh` for the 5090 image):
 - Initializes and starts FileBrowser on port 8080 (root `/workspace`). Default admin user is created on first run.
 - Starts JupyterLab on port 8888, root at `/workspace`. Token set via `JUPYTER_PASSWORD` if provided.
 - Ensures `comfyui_args.txt` exists.
-- Clones ComfyUI and preselected custom nodes on first run, then creates a Python 3.12 venv and installs dependencies using `uv`.
-- Starts ComfyUI with fixed args `--listen 0.0.0.0 --port 8188` plus any custom args from `comfyui_args.txt`.
+- On first boot: copies baked ComfyUI and custom nodes from `/opt/comfyui-baked` to `/workspace/runpod-slim/ComfyUI/`, then creates a Python 3.12 venv with `--system-site-packages`.
+- On subsequent boots: activates existing venv (no network calls).
+- Starts ComfyUI **in the foreground** via `exec` (becomes PID 1) with fixed args `--listen 0.0.0.0 --port 8188` plus any custom args from `comfyui_args.txt`. Logs go directly to container stdout.
 
 Differences in 5090 script:
 
 - Virtualenv path: `.venv-cu128`
-- Masks torch-related lines in ComfyUI `requirements.txt` and installs torch/cu128 wheels explicitly: `torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128`.
 
 ## Ports
 
@@ -103,32 +104,48 @@ Recognized at runtime by the start scripts:
 - Venv location:
   - Regular: `/workspace/runpod-slim/ComfyUI/.venv`
   - 5090: `/workspace/runpod-slim/ComfyUI/.venv-cu128`
-- `uv` is used for dependency installation for speed and reproducibility.
-- Regular image installs ComfyUI `requirements.txt` as-is.
-- 5090 image comments out torch-related requirements and installs CUDA 12.8 torch wheels explicitly.
-- Custom nodes: repos are cloned into `ComfyUI/custom_nodes/`. On first run and subsequent starts, the script attempts to install each node’s `requirements.txt`, run `install.py`, or `setup.py` if present.
+- All dependencies are pre-installed at image build time. No pip installs occur at runtime.
+- **Version pins live in `docker-bake.hcl`** (single source of truth, not in the Dockerfiles). Dockerfiles declare `ARG` names but the default values are set in the bake file:
+  - `COMFYUI_VERSION` — ComfyUI release tag
+  - `MANAGER_SHA`, `KJNODES_SHA`, `CIVICOMFY_SHA`, `RUNPODDIRECT_SHA` — custom node commit hashes
+  - `TORCH_VERSION`, `TORCHVISION_VERSION`, `TORCHAUDIO_VERSION` — PyTorch stack versions
+  - `FILEBROWSER_VERSION` + `FILEBROWSER_SHA256` — FileBrowser binary with checksum
+- To update a version: edit the corresponding `variable` block in `docker-bake.hcl`.
+- CI or ad-hoc builds can override any variable via environment variables:
+  ```bash
+  COMFYUI_VERSION=v0.15.0 docker buildx bake regular
+  ```
+- `scripts/fetch-hashes.sh` queries the GitHub API for the latest commit hash of each custom node repo and prints HCL-formatted variable blocks ready to copy-paste into `docker-bake.hcl`. Set `GITHUB_TOKEN` env var for authenticated requests (higher API rate limit).
+- Source code is downloaded as zip archives from GitHub (no git clone in build or runtime).
+- A lock file with SHA256 hashes is generated inside the builder stage using `pip-compile --generate-hashes`.
+- Regular image installs PyTorch from `https://download.pytorch.org/whl/cu126`.
+- 5090 image installs PyTorch from `https://download.pytorch.org/whl/cu129`.
+- At runtime, baked ComfyUI is copied from `/opt/comfyui-baked` to `/workspace/runpod-slim/ComfyUI/` on first boot.
 
-Preinstalled custom nodes (initial set):
+Preinstalled custom nodes:
 
 - `ComfyUI-Manager` (ltdrdata)
 - `ComfyUI-KJNodes` (kijai)
 - `Civicomfy` (MoonGoblinDev)
+- `ComfyUI-RunpodDirect` (MadiatorLabs)
 
 ## Customization Points
 
 - `comfyui_args.txt` – Add one CLI arg per line; comments starting with `#` are ignored. These are appended after fixed args.
-- Add/remove custom nodes by editing the `CUSTOM_NODES` array in the start script(s), or pre-baking them into the image.
+- Add/remove custom nodes by adding/removing download blocks and ARGs in the Dockerfile(s).
 - Additional system packages: modify the respective Dockerfile `apt-get install` lines.
-- Python packages: extend installation blocks in the start script after venv activation. Prefer `uv pip install --no-cache ...`.
+- Users can install additional custom nodes at runtime via ComfyUI-Manager (user's responsibility, not baked).
 
 ## Dev Conventions
 
-- Keep images lean. Prefer runtime install via `uv` over baking large wheels unless required (e.g., 5090 torch wheels).
+- Keep images lean. All Python dependencies are baked at build time via lock file.
+- To update a dependency: bump the relevant variable in `docker-bake.hcl`, push, trigger build.
+- Source archives are used instead of `git clone` — no git dependency in builds.
 - Avoid changing ports; they are referenced by external templates (RunPod/UI tooling).
 - Use Python 3.12. Do not downgrade in scripts.
 - When adding new env vars needed by downstream processes, ensure they are exported in `export_env_vars()` the same way as others.
-- For new custom nodes, ensure idempotent installs: the loop checks for `requirements.txt`, `install.py`, and `setup.py`.
 - Shell scripting: keep `set -e` at top; prefer explicit guards; write idempotent steps safe to re-run.
+- Runtime `start.sh` must NEVER call pip, git clone, or execute arbitrary install scripts. All dependencies are baked in the image.
 
 ## Local Development Tips
 
@@ -155,7 +172,7 @@ Preinstalled custom nodes (initial set):
   - Ensure port 22 is mapped from the host, e.g., `-p 2222:22`.
 - GPU/torch issues on 5090 image:
   - Verify you’re running the `-5090` tag.
-  - Torch builds are installed from `https://download.pytorch.org/whl/cu128`; confirm compatibility with the host driver.
+  - Torch builds are installed from `https://download.pytorch.org/whl/cu129`; confirm compatibility with the host driver.
 
 ## Release & Tagging
 
