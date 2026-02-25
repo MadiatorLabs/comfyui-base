@@ -18,7 +18,7 @@ variable "CIVICOMFY_SHA" {
 variable "RUNPODDIRECT_SHA" {
   default = "f7cc02cccb49"
 }
-# Regular image (cu126)
+# Regular image (cu128)
 variable "TORCH_VERSION" {
   default = "2.10.0"
 }
@@ -28,7 +28,7 @@ variable "TORCHVISION_VERSION" {
 variable "TORCHAUDIO_VERSION" {
   default = "2.10.0"
 }
-# 5090 image (cu129) — can diverge from regular when needed
+# 5090 image (cu130) — can diverge from regular when needed
 variable "TORCH_VERSION_5090" {
   default = "2.10.0"
 }
@@ -49,10 +49,11 @@ group "default" {
   targets = ["common", "dev"]
 }
 
-# Common settings for all targets
+# Common settings for all targets (defaults to regular CUDA 12.8 / cu128)
 target "common" {
-  context = "."
-  platforms = ["linux/amd64"]
+  context    = "."
+  dockerfile = "Dockerfile"
+  platforms  = ["linux/amd64"]
   args = {
     COMFYUI_VERSION     = COMFYUI_VERSION
     MANAGER_SHA         = MANAGER_SHA
@@ -64,13 +65,14 @@ target "common" {
     TORCHAUDIO_VERSION  = TORCHAUDIO_VERSION
     FILEBROWSER_VERSION = FILEBROWSER_VERSION
     FILEBROWSER_SHA256  = FILEBROWSER_SHA256
+    CUDA_VERSION_DASH   = "12-8"
+    TORCH_INDEX_SUFFIX  = "cu128"
   }
 }
 
-# Regular ComfyUI image (CUDA 12.6)
+# Regular ComfyUI image (CUDA 12.8)
 target "regular" {
   inherits = ["common"]
-  dockerfile = "Dockerfile"
   tags = [
     "runpod/comfyui:${TAG}",
     "runpod/comfyui:latest",
@@ -80,7 +82,6 @@ target "regular" {
 # Dev image for local testing
 target "dev" {
   inherits = ["common"]
-  dockerfile = "Dockerfile"
   tags = ["runpod/comfyui:dev"]
   output = ["type=docker"]
 }
@@ -88,25 +89,24 @@ target "dev" {
 # Dev push targets (for CI pushing dev tags, without overriding latest)
 target "devpush" {
   inherits = ["common"]
-  dockerfile = "Dockerfile"
   tags = ["runpod/comfyui:dev"]
 }
 
 target "devpush5090" {
   inherits = ["common"]
-  dockerfile = "Dockerfile.5090"
   tags = ["runpod/comfyui:dev-5090"]
   args = {
     TORCH_VERSION       = TORCH_VERSION_5090
     TORCHVISION_VERSION = TORCHVISION_VERSION_5090
     TORCHAUDIO_VERSION  = TORCHAUDIO_VERSION_5090
+    CUDA_VERSION_DASH   = "13-0"
+    TORCH_INDEX_SUFFIX  = "cu130"
   }
 }
 
-# RTX 5090 optimized image (CUDA 12.9 + latest PyTorch build)
+# RTX 5090 / Blackwell image (CUDA 13.0 + latest PyTorch build)
 target "rtx5090" {
   inherits = ["common"]
-  dockerfile = "Dockerfile.5090"
   tags = [
     "runpod/comfyui:${TAG}-5090",
     "runpod/comfyui:latest-5090",
@@ -115,5 +115,7 @@ target "rtx5090" {
     TORCH_VERSION       = TORCH_VERSION_5090
     TORCHVISION_VERSION = TORCHVISION_VERSION_5090
     TORCHAUDIO_VERSION  = TORCHAUDIO_VERSION_5090
+    CUDA_VERSION_DASH   = "13-0"
+    TORCH_INDEX_SUFFIX  = "cu130"
   }
 }

@@ -15,6 +15,10 @@ ARG TORCH_VERSION
 ARG TORCHVISION_VERSION
 ARG TORCHAUDIO_VERSION
 
+# ---- CUDA variant (set in docker-bake.hcl per target) ----
+ARG CUDA_VERSION_DASH=12-8
+ARG TORCH_INDEX_SUFFIX=cu128
+
 # Install minimal dependencies needed for building
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
@@ -29,7 +33,7 @@ RUN apt-get update && \
     && wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb \
     && dpkg -i cuda-keyring_1.1-1_all.deb \
     && apt-get update \
-    && apt-get install -y --no-install-recommends cuda-minimal-build-12-6 libcusparse-dev-12-6 \
+    && apt-get install -y --no-install-recommends cuda-minimal-build-${CUDA_VERSION_DASH} libcusparse-dev-${CUDA_VERSION_DASH} \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
     && rm cuda-keyring_1.1-1_all.deb \
@@ -81,7 +85,7 @@ RUN cd /tmp/build/ComfyUI && \
 # Install PyTorch (pinned version)
 RUN python3.12 -m pip install --no-cache-dir \
     torch==${TORCH_VERSION} torchvision==${TORCHVISION_VERSION} torchaudio==${TORCHAUDIO_VERSION} \
-    --index-url https://download.pytorch.org/whl/cu126
+    --index-url https://download.pytorch.org/whl/${TORCH_INDEX_SUFFIX}
 
 # Generate lock file from all requirements, then install with hash verification
 WORKDIR /tmp/build
@@ -101,6 +105,10 @@ RUN cat ComfyUI/requirements.txt > requirements.in && \
     PIP_CONSTRAINT=constraints.txt pip-compile --generate-hashes --output-file=requirements.lock --strip-extras --allow-unsafe requirements.in && \
     python3.12 -m pip install --no-cache-dir --ignore-installed --require-hashes -r requirements.lock
 
+# Pre-populate ComfyUI-Manager cache so first cold start skips the slow registry fetch
+COPY scripts/prebake-manager-cache.py /tmp/prebake-manager-cache.py
+RUN python3.12 /tmp/prebake-manager-cache.py /tmp/build/ComfyUI/user/__manager/cache
+
 # Bake ComfyUI + custom nodes into a known location for runtime copy
 RUN cp -r /tmp/build/ComfyUI /opt/comfyui-baked
 
@@ -113,6 +121,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV IMAGEIO_FFMPEG_EXE=/usr/bin/ffmpeg
 ENV FILEBROWSER_CONFIG=/workspace/runpod-slim/.filebrowser.json
+
+# ---- CUDA variant (re-declared for runtime stage) ----
+ARG CUDA_VERSION_DASH=12-8
 
 # ---- FileBrowser version pin (set in docker-bake.hcl) ----
 ARG FILEBROWSER_VERSION
@@ -146,7 +157,7 @@ RUN apt-get update && \
     && wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb \
     && dpkg -i cuda-keyring_1.1-1_all.deb \
     && apt-get update \
-    && apt-get install -y --no-install-recommends cuda-minimal-build-12-6 \
+    && apt-get install -y --no-install-recommends cuda-minimal-build-${CUDA_VERSION_DASH} \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
     && rm cuda-keyring_1.1-1_all.deb \
