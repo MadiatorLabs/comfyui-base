@@ -7,16 +7,16 @@ variable "COMFYUI_VERSION" {
   default = "v0.18.2"
 }
 variable "MANAGER_SHA" {
-  default = "bbafbb1290f0"
+  default = "66108ccdbc8c"
 }
 variable "KJNODES_SHA" {
-  default = "068d4fee62d3"
+  default = "4e1458c2417d"
 }
 variable "CIVICOMFY_SHA" {
   default = "555e984bbcb0"
 }
 variable "RUNPODDIRECT_SHA" {
-  default = "6f3a08b8b79c"
+  default = "8be7b2206b75"
 }
 # Regular image (cu128)
 variable "TORCH_VERSION" {
